@@ -163,7 +163,7 @@ implicit none
    real, allocatable:: u00(:,:,:), v00(:,:,:)
 #endif
 private
-public :: fv_dynamics
+public :: fv_dynamics,calc_tot_energy_dynamics1
 
 contains
 
@@ -177,7 +177,12 @@ contains
                         ps, pe, pk, peln, pkz, phis, q_con, omga, ua, va, uc, vc,     &
                         ak, bk, mfx, mfy, cx, cy, ze0, hybrid_z,                      &
                         gridstruct, flagstruct, neststruct, idiag, bd,                &
-                        parent_grid, domain, diss_est, time_total)
+                        parent_grid, domain, diss_est,                                &
+#if ( defined CALC_ENERGY )
+                        qsize,qsize_condensate_loading,qsize_condensate_loading_idx,qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+                        se,ke,wv,wl,wi,wr,wsno,wg,tt,mo,mr,gravit, cpair, rearth,omega_cam,fv3_lcp_moist,fv3_lcv_moist,    &
+#endif
+                        time_total)
 
 #ifdef CCPP
     use mpp_mod,   only: FATAL, mpp_error
@@ -254,6 +259,7 @@ contains
     type(fv_diag_type),  intent(IN)    :: idiag
 
 ! Local Arrays
+      real :: temp(bd%isd:bd%ied ,bd%jsd:bd%jed,npz)  !< temperature (K)
       real :: ws(bd%is:bd%ie,bd%js:bd%je)
 #ifndef CCPP
       real :: te_2d(bd%is:bd%ie,bd%js:bd%je)
@@ -330,8 +336,20 @@ contains
       te_2d = 0.
 
       allocate ( dp1(isd:ied, jsd:jed, 1:npz) )
-      call init_ijk_mem(isd,ied, jsd,jed, npz, dp1, 0.)
-
+      
+#if ( defined CALC_ENERGY )
+       se=0.
+       ke=0.
+       wv=0.
+       wl=0.
+       wi=0.
+       wr=0.
+       wsno=0.
+       wg=0.
+       tt=0.
+       mo=0.
+       mr=0.
+#endif
 #ifdef MOIST_CAPPA
       allocate ( cappa(isd:ied,jsd:jed,npz) )
       call init_ijk_mem(isd,ied, jsd,jed, npz, cappa, 0.)
@@ -568,6 +586,20 @@ contains
         endif
       endif
 
+#if ( defined CALC_ENERGY )
+      call calc_tot_energy_dynamics1(gridstruct, flagstruct,domain,bd,npx,npy,npz,ncnst,ps, &
+           ptop,delp,u,v,ua,va,q,pt,phis, 'dAT', &
+           qsize,qsize_condensate_loading, &
+           qsize_condensate_loading_idx, &
+           qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+           se(is:ie,js:je,4), ke(is:ie,js:je,4), wv(is:ie,js:je,4),wl(is:ie,js:je,4), &
+           wi(is:ie,js:je,4), wr(is:ie,js:je,4),wsno(is:ie,js:je,4),wg(is:ie,js:je,4), &
+           tt(is:ie,js:je,4),mo(is:ie,js:je,4),mr(is:ie,js:je,4), &
+           gravit, cpair, rearth,omega_cam,1,.true.,fv3_lcp_moist,fv3_lcv_moist)
+#endif
+      
+
+      
 #endif
 
 #ifndef SW_DYNAMICS
@@ -621,8 +653,8 @@ contains
   mdt = bdt / real(k_split)
 
 #ifndef CCPP
+  allocate ( dtdt_m(is:ie,js:je,npz) )
   if ( idiag%id_mdt > 0 .and. (.not. do_adiabatic_init) ) then
-       allocate ( dtdt_m(is:ie,js:je,npz) )
 !$OMP parallel do default(none) shared(is,ie,js,je,npz,dtdt_m)
        do k=1,npz
           do j=js,je
@@ -637,6 +669,38 @@ contains
                                                   call timing_on('FV_DYN_LOOP')
   do n_map=1, k_split   ! first level of time-split
       k_step = n_map
+
+      if ( n_map==k_split ) last_step = .true.
+
+#ifdef USE_COND
+      !$OMP parallel do default(none) shared(is,ie,js,je,npz,pt,q,pkz,zvir,sphum,temp,q_con)
+#else
+      !$OMP parallel do default(none) shared(is,ie,js,je,npz,pt,q,pkz,zvir,sphum,temp)
+#endif
+      do k=1,npz
+         do j=js,je
+            do i=is,ie
+#ifdef USE_COND
+               temp(i,j,k)=pt(i,j,k)*pkz(i,j,k)/((1.+zvir*q(i,j,k,sphum))*(1.-q_con(i,j,k)))
+#else
+               temp(i,j,k)=pt(i,j,k)*pkz(i,j,k)/(1.+zvir*q(i,j,k,sphum))
+#endif
+            enddo
+         enddo
+      enddo
+
+#if ( defined CALC_ENERGY )
+      call calc_tot_energy_dynamics1(gridstruct, flagstruct,domain,bd,npx,npy,npz,ncnst,ps, &
+           ptop,delp,u,v,ua,va,q,temp,phis, 'dAF', &
+           qsize,qsize_condensate_loading, &
+           qsize_condensate_loading_idx, &
+           qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+           se(is:ie,js:je,1), ke(is:ie,js:je,1), wv(is:ie,js:je,1),wl(is:ie,js:je,1), &
+           wi(is:ie,js:je,1), wr(is:ie,js:je,1),wsno(is:ie,js:je,1),wg(is:ie,js:je,1), &
+           tt(is:ie,js:je,1),mo(is:ie,js:je,1),mr(is:ie,js:je,1), &
+           gravit, cpair, rearth,omega_cam,k_split,last_step,fv3_lcp_moist,fv3_lcv_moist)
+#endif
+
                                            call timing_on('COMM_TOTAL')
 #ifdef USE_COND
       call start_group_halo_update(i_pack(11), q_con, domain)
@@ -691,7 +755,34 @@ contains
                     gridstruct, flagstruct, neststruct, idiag, bd, &
                     domain, n_map==1, i_pack, last_step, diss_est,time_total)
                                            call timing_off('DYN_CORE')
-
+#ifdef USE_COND
+      !$OMP parallel do default(none) shared(is,ie,js,je,npz,pt,q,pkz,zvir,sphum,temp,q_con)
+#else
+      !$OMP parallel do default(none) shared(is,ie,js,je,npz,pt,q,pkz,zvir,sphum,temp)
+#endif
+      do k=1,npz
+         do j=js,je
+            do i=is,ie
+#ifdef USE_COND
+               temp(i,j,k)=pt(i,j,k)*pkz(i,j,k)/((1.+zvir*q(i,j,k,sphum))*(1.-q_con(i,j,k)))
+#else
+               temp(i,j,k)=pt(i,j,k)*pkz(i,j,k)/(1.+zvir*q(i,j,k,sphum))
+#endif
+            enddo
+         enddo
+      enddo
+      
+#if ( defined CALC_ENERGY )
+      call calc_tot_energy_dynamics1(gridstruct, flagstruct,domain,bd,npx,npy,npz,ncnst,ps, &
+           ptop,delp,u,v,ua,va,q,temp,phis, 'dAD', &
+           qsize,qsize_condensate_loading, &
+           qsize_condensate_loading_idx, &
+           qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+           se(is:ie,js:je,2), ke(is:ie,js:je,2), wv(is:ie,js:je,2),wl(is:ie,js:je,2), &
+           wi(is:ie,js:je,2), wr(is:ie,js:je,2),wsno(is:ie,js:je,2), wg(is:ie,js:je,2), &
+           tt(is:ie,js:je,2),mo(is:ie,js:je,2),mr(is:ie,js:je,2), &
+           gravit, cpair, rearth,omega_cam,k_split,last_step,fv3_lcp_moist,fv3_lcv_moist)
+#endif      
 #ifdef SW_DYNAMICS
 !!$OMP parallel do default(none) shared(is,ie,js,je,ps,delp,agrav)
       do j=js,je
@@ -776,6 +867,47 @@ contains
                      flagstruct%do_sat_adj, hydrostatic, hybrid_z, do_omega,            &
                      flagstruct%adiabatic, do_adiabatic_init)
 
+#if ( defined CALC_ENERGY )
+         if (last_step) then
+            call calc_tot_energy_dynamics1(gridstruct, flagstruct,domain,bd,npx,npy,npz,ncnst,ps, &
+                 ptop,delp,u,v,ua,va,q,pt,phis, 'dAR', &
+                 qsize,qsize_condensate_loading, &
+                 qsize_condensate_loading_idx, &
+                 qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+                 se(is:ie,js:je,3), ke(is:ie,js:je,3), wv(is:ie,js:je,3),wl(is:ie,js:je,3), &
+                 wi(is:ie,js:je,3), wr(is:ie,js:je,3),wsno(is:ie,js:je,3),wg(is:ie,js:je,3), &
+                 tt(is:ie,js:je,3),mo(is:ie,js:je,3),mr(is:ie,js:je,3), &
+                 gravit, cpair, rearth,omega_cam,k_split,last_step,fv3_lcp_moist,fv3_lcv_moist)
+
+         else
+#ifdef USE_COND
+            !$OMP parallel do default(none) shared(is,ie,js,je,npz,pt,q,pkz,zvir,sphum,temp,q_con)
+#else
+            !$OMP parallel do default(none) shared(is,ie,js,je,npz,pt,q,pkz,zvir,sphum,temp)
+#endif
+            do k=1,npz
+               do j=js,je
+                  do i=is,ie
+#ifdef USE_COND
+                     temp(i,j,k)=pt(i,j,k)*pkz(i,j,k)/((1.+zvir*q(i,j,k,sphum))*(1.-q_con(i,j,k)))
+#else
+                     temp(i,j,k)=pt(i,j,k)*pkz(i,j,k)/(1.+zvir*q(i,j,k,sphum))
+#endif
+                  enddo
+               enddo
+             enddo
+             call calc_tot_energy_dynamics1(gridstruct, flagstruct,domain,bd,npx,npy,npz,ncnst,ps, &
+                 ptop,delp,u,v,ua,va,q,temp,phis, 'dAR', &
+                 qsize,qsize_condensate_loading, &
+                 qsize_condensate_loading_idx, &
+                 qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+                 se(is:ie,js:je,3), ke(is:ie,js:je,3),wv(is:ie,js:je,3),wl(is:ie,js:je,3), &
+                 wi(is:ie,js:je,3),wr(is:ie,js:je,3),wsno(is:ie,js:je,3),wg(is:ie,js:je,3), &
+                 tt(is:ie,js:je,3),mo(is:ie,js:je,3),mr(is:ie,js:je,3), &
+                 gravit, cpair, rearth,omega_cam,k_split,last_step,fv3_lcp_moist,fv3_lcv_moist)
+            
+         end if
+#endif
 #ifdef AVEC_TIMERS
                                                   call avec_timer_stop(6)
 #endif
@@ -834,10 +966,10 @@ contains
        enddo
 !      call prt_mxm('Fast DTDT (deg/Day)', dtdt_m, is, ie, js, je, 0, npz, 1., gridstruct%area_64, domain)
        used = send_data(idiag%id_mdt, dtdt_m, fv_time)
-#ifndef CCPP
-       deallocate ( dtdt_m )
-#endif
   endif
+#ifndef CCPP
+  deallocate ( dtdt_m )
+#endif
 
   if( nwat == 6 ) then
      if (cld_amt > 0) then
@@ -1480,5 +1612,384 @@ contains
   enddo
 
  end subroutine compute_aam
+
+!===============================================================================
+  subroutine calc_tot_energy_dynamics1(gridstruct, flagstruct,domain,bd,npx,npy,npz,ncnst,ps, &
+                                       ptop,delp,u,v,ua_in,va_in,q,pt,phis,outfld_name_suffix, &
+                                       qsize,qsize_condensate_loading,qsize_condensate_loading_idx,qsize_tracer_idx_cam2dyn,qsize_condensate_loading_cp,qsize_condensate_loading_cv, &
+                                       se, ke,wv,wl,wi,wr,ws,wg,tt,mo,mr,gravit, cpair, rearth,omega_cam,ncnt,last_step,fv3_lcp_moist,fv3_lcv_moist)
+    use constants_mod,          only: grav, radius, cp_air, omega
+    use field_manager_mod,      only: MODEL_ATMOS
+    use fv_mp_mod,              only: ng
+    use fv_grid_utils_mod,      only:  c2l_ord2,g_sum
+    !------------------------------Arguments--------------------------------
+    
+    type(fv_grid_type),  intent(IN), target                          :: gridstruct
+    type(fv_flags_type), intent(IN)                                  :: flagstruct
+    type(domain2d), intent(inout)                                    :: domain
+    type(fv_grid_bounds_type), intent(IN)                            :: bd
+    integer, intent(in)                                              :: npx,npy,npz,ncnt
+    logical, intent(in)                                              :: last_step
+    logical, intent(in)                                              :: fv3_lcp_moist
+    logical, intent(in)                                              :: fv3_lcv_moist
+    integer, intent(in)                                              :: ncnst
+    real, intent(in)                                                 :: gravit,cpair,rearth,omega_cam,ptop
+    real, intent(in), dimension(bd%isd:bd%ied ,bd%jsd:bd%jed)        :: phis,ps
+    real, intent(in), dimension(bd%isd:bd%ied ,bd%jsd:bd%jed ,npz)   :: pt,delp
+    real, intent(inout), dimension(bd%isd:bd%ied  ,bd%jsd:bd%jed+1,npz) :: u !< D grid zonal wind (m/s)
+    real, intent(inout), dimension(bd%isd:bd%ied+1,bd%jsd:bd%jed  ,npz) :: v !< D grid meridional wind (m/s)
+    real, intent(in) :: q(   bd%isd:bd%ied  ,bd%jsd:bd%jed  ,npz, ncnst) !< specific humidity and constituents
+    real, intent(inout), dimension(bd%isd:bd%ied ,bd%jsd:bd%jed ,npz)   :: ua_in, va_in
+    real, intent(inout), dimension(bd%is:bd%ie ,bd%js:bd%je)           :: se,ke,wv,wl,wi,wr,ws,wg,tt,mo,mr
+    character*(*)    , intent(in)                                    :: outfld_name_suffix ! suffix for "outfld" names
+    integer, intent(IN)                                              :: qsize
+    integer, intent(IN)                                              :: qsize_condensate_loading
+    integer, intent(IN),dimension(qsize_condensate_loading)          :: qsize_condensate_loading_idx
+    integer, intent(IN),dimension(qsize)                             :: qsize_tracer_idx_cam2dyn
+    real,    intent(IN),dimension(qsize_condensate_loading)          :: qsize_condensate_loading_cp
+    real,    intent(IN),dimension(qsize_condensate_loading)          :: qsize_condensate_loading_cv
+    real, dimension(bd%isd:bd%ied ,bd%jsd:bd%jed )                   :: areasqrad
+    real, dimension(bd%is:bd%ie ,bd%js:bd%je)                        :: senew,kenew,wvnew,wlnew,winew, &
+                                                                        wrnew,wsnew,wgnew,ttnew,monew,mrnew
+    real, dimension(bd%isd:bd%ied ,bd%jsd:bd%jed ,npz)  :: dp
+    real, dimension(bd%isd:bd%ied ,bd%jsd:bd%jed)       :: ps_local
+    real, dimension(bd%isd:bd%ied ,bd%jsd:bd%jed ,npz)   :: ua, va
+    !---------------------------Local storage-------------------------------
+    
+    real :: se_tmp
+    real :: ke_tmp
+    real :: wv_tmp
+    real :: wl_tmp
+    real :: wi_tmp
+    real :: wr_tmp
+    real :: ws_tmp
+    real :: wg_tmp
+    real :: tt_tmp
+
+    real :: pdel
+    real :: rncnt
+    !
+    ! global axial angular momentum (AAM) can be separated into one part (mr) associatedwith the relative motion 
+    ! of the atmosphere with respect to the planets surface (also known as wind AAM) and another part (mo) 
+    ! associated with the angular velocity OMEGA (2*pi/d, where d is the length of the day) of the planet 
+    ! (also known as mass AAM)
+    !
+    real :: mr_cnst, mo_cnst, cos_lat, mr_tmp, mo_tmp
+
+    real :: se_glob, ke_glob, wv_glob, wl_glob, wi_glob, wr_glob, ws_glob, wg_glob, tt_glob, mr_glob, mo_glob
+
+    integer :: i,j,k,nq,m_cnst,n,idim,m_cnst_ffsl
+    integer :: ixcldice, ixcldliq, ixtt,ixcldliq_ffsl,ixcldice_ffsl,ixtt_ffsl ! CLDICE, CLDLIQ and test tracer indices
+    integer :: ixrain, ixsnow, ixgraupel,ixrain_ffsl, ixsnow_ffsl, ixgraupel_ffsl
+!!$    character(len=16) :: name_out1,name_out2,name_out3,name_out4,name_out5,name_out6
+
+    integer :: lchnk,ncol
+    integer :: is,ie,js,je,isd,ied,jsd,jed
+!!jt    logical :: fv3_lcp_moist
+    logical :: printglobals = .false.
+    !-----------------------------------------------------------------------
+
+!!jt    fv3_lcp_moist                = .false.
+    dp = delp
+    
+    is = bd%is
+    ie = bd%ie
+    js = bd%js
+    je = bd%je
+    isd = bd%isd
+    ied = bd%ied
+    jsd = bd%jsd
+    jed = bd%jed
+
+    se_glob = 0.
+    ke_glob = 0.
+    wv_glob = 0.
+    wl_glob = 0.
+    wi_glob = 0.
+    wr_glob = 0.
+    ws_glob = 0.
+    wg_glob = 0.
+    tt_glob = 0.
+    mr_glob = 0.
+    mo_glob = 0.
+
+    senew=0.
+    kenew=0.
+    wvnew=0.
+    wlnew=0.
+    winew=0.
+    wrnew=0.
+    wsnew=0.
+    wgnew=0.
+    ttnew=0.
+    mrnew=0.
+    monew=0.
+    ua=0.
+    va=0.
+    call cubed_to_latlon(u, v, ua, va, gridstruct, &
+         npx, npy, npz, 1, gridstruct%grid_type, domain, gridstruct%nested, flagstruct%c2l_ord, bd)
+    
+!!$    if ( hist_fld_active(name_out1).or.hist_fld_active(name_out2).or.hist_fld_active(name_out3).or.&
+!!$         hist_fld_active(name_out4).or.hist_fld_active(name_out5).or.hist_fld_active(name_out6).or..true.) then
+       if (qsize_condensate_loading>1) then
+          ixcldliq_ffsl  = get_tracer_index (MODEL_ATMOS, 'liq_wat' )
+          ixcldice_ffsl  = get_tracer_index (MODEL_ATMOS, 'ice_wat' )
+          ixrain_ffsl    = get_tracer_index (MODEL_ATMOS, 'rainwat' )
+          ixsnow_ffsl    = get_tracer_index (MODEL_ATMOS, 'snowwat' )
+          ixgraupel_ffsl = get_tracer_index (MODEL_ATMOS, 'graupel' )
+       else
+          ixcldliq_ffsl = -1
+          ixcldice_ffsl = -1
+          ixrain_ffsl = -1
+          ixsnow_ffsl = -1 
+          ixgraupel_ffsl = -1
+       end if
+       
+       ixtt_ffsl = -1
+       
+       
+       !
+       ! Compute frozen static energy in 3 parts:  KE, SE, and energy associated with vapor and liquid
+       !
+       do k = 1, npz
+          n=0
+          do j=js,je
+             do i = is, ie
+               n=n+1
+               !
+               ! make energy consistent with CAM physics (only water vapor and dry air in pressure)
+               !
+               if ((.not.fv3_lcp_moist).and.(.not.fv3_lcv_moist).and.qsize_condensate_loading>1) then
+                 do nq=2,qsize_condensate_loading
+                   m_cnst_ffsl=qsize_condensate_loading_idx(nq)
+!jt                   m_cnst=qsize_condensate_loading_idx(nq)
+!jt                   m_cnst_ffsl=qsize_tracer_idx_cam2dyn(m_cnst)
+                   dp(i,j,k) = dp(i,j,k) - delp(i,j,k)*q(i,j,k,m_cnst_ffsl)
+                 end do
+               end if
+                !
+                ! kinetic energy
+                !
+                ke_tmp   = 0.5*(va(i,j,k)**2+ ua(i,j,k)**2)*dp(i,j,k)/gravit
+                if (fv3_lcp_moist.or.fv3_lcv_moist) then
+                   !
+                   ! Internal energy formula including all condensates and corresponding heat capacities
+                   !
+                   ! Start with energy of dry air and add energy of condensates
+                   dp(i,j,k) = delp(i,j,k)             
+                   do nq=1,qsize_condensate_loading                 
+                      m_cnst_ffsl=qsize_condensate_loading_idx(nq)
+                      dp(i,j,k) = dp(i,j,k)-delp(i,j,k)*q(i,j,k,m_cnst_ffsl)
+                   end do
+                   se_tmp = cpair*dp(i,j,k)
+                   do nq=1,qsize_condensate_loading
+                      m_cnst_ffsl=qsize_condensate_loading_idx(nq)
+                      if (fv3_lcv_moist) then
+                         se_tmp = se_tmp+qsize_condensate_loading_cv(nq)*q(i,j,k,m_cnst_ffsl)*delp(i,j,k)
+                      end if
+                      if (fv3_lcp_moist) then
+                         se_tmp = se_tmp+qsize_condensate_loading_cp(nq)*q(i,j,k,m_cnst_ffsl)*delp(i,j,k)
+                   end if
+                   end do
+                   se_tmp = se_tmp*pt(i,j,k)/gravit
+                   ! reset dp to delp to use for ps_local calc below
+                   dp(i,j,k) = delp(i,j,k)             
+                else
+                   !
+                   ! using CAM physics definition of internal energy
+                   !
+                  se_tmp   = cpair*pt(i,j,k)*dp(i,j,k)/gravit
+                end if
+                wv_tmp   =  q(i,j,k,1)*delp(i,j,k)/gravit
+                
+                senew(i,j) = senew(i,j) + se_tmp
+                kenew(i,j) = kenew(i,j) + ke_tmp
+                wvnew(i,j) = wvnew(i,j) + wv_tmp
+
+             end do
+          end do
+       end do
+       
+       do j=js,je
+          do i = is,ie
+             ps_local(i,j) =   ptop+sum(dp(i,j,:))
+          end do
+       end do
+
+       do j=js,je
+          do i = is,ie
+            senew(i,j) = senew(i,j) + phis(i,j)*ps_local(i,j)/gravit
+          end do
+       end do
+       
+       ! Don't require cloud liq/ice to be present.  Allows for adiabatic/ideal phys.
+       
+       if (ixcldliq_ffsl > 1) then
+!!$          ixcldliq_ffsl = qsize_tracer_idx_cam2dyn(ixcldliq)
+          do k = 1, npz
+             do j = js, je
+                do i = is, ie
+                   wl_tmp   = q(i,j,k,ixcldliq_ffsl)*delp(i,j,k)/gravit
+                   wlnew   (i,j) = wlnew(i,j) + wl_tmp
+                end do
+             end do
+          end do
+       end if
+       
+       if (ixcldice_ffsl > 1) then
+!!$          ixcldice_ffsl = qsize_tracer_idx_cam2dyn(ixcldice)
+          do k = 1, npz
+             do j = js, je
+                do i = is, ie
+                   wi_tmp   = q(i,j,k,ixcldice_ffsl)*delp(i,j,k)/gravit
+                   winew(i,j)    = winew(i,j) + wi_tmp
+                end do
+             end do
+          end do
+       end if
+
+       if (ixrain_ffsl > 1) then
+!!$          ixrain_ffsl = qsize_tracer_idx_cam2dyn(ixrain)
+          do k = 1, npz
+             do j = js, je
+                do i = is, ie
+                   wr_tmp   = q(i,j,k,ixrain_ffsl)*delp(i,j,k)/gravit
+                   wrnew   (i,j) = wrnew(i,j) + wr_tmp
+                end do
+             end do
+          end do
+       end if
+       
+       if (ixsnow_ffsl > 1) then
+!!$          ixsnow_ffsl = qsize_tracer_idx_cam2dyn(ixsnow)
+          do k = 1, npz
+             do j = js, je
+                do i = is, ie
+                   ws_tmp   = q(i,j,k,ixsnow_ffsl)*delp(i,j,k)/gravit
+                   wsnew(i,j)    = wsnew(i,j) + wi_tmp
+                end do
+             end do
+          end do
+       end if
+
+       if (ixgraupel_ffsl > 1) then
+!!$          ixgraupel_ffsl = qsize_tracer_idx_cam2dyn(ixgraupel)
+          do k = 1, npz
+             do j = js, je
+                do i = is, ie
+                   wg_tmp   = q(i,j,k,ixgraupel_ffsl)*delp(i,j,k)/gravit
+                   wgnew(i,j)    = wgnew(i,j) + wg_tmp
+                end do
+             end do
+          end do
+       end if
+
+       
+       if (ixtt_ffsl > 1) then
+          do k = 1, npz
+             do j = js, je
+                do i = is, ie
+                   tt_tmp   = q(i,j,k,ixtt_ffsl)*delp(i,j,k)/gravit
+                   ttnew   (i,j) = ttnew(i,j) + tt_tmp
+                end do
+             end do
+          end do
+       end if
+    
+    ! Axial angular momentum diagnostics
+    !
+    ! Code follows 
+    !
+    ! Lauritzen et al., (2014): Held-Suarez simulations with the Community Atmosphere Model
+    ! Spectral Element (CAM-SE) dynamical core: A global axial angularmomentum analysis using Eulerian
+    ! and floating Lagrangian vertical coordinates. J. Adv. Model. Earth Syst. 6,129-140, 
+    ! doi:10.1002/2013MS000268
+    !
+    ! MR is equation (6) without \Delta A and sum over areas (areas are in units of radians**2)
+    ! MO is equation (7) without \Delta A and sum over areas (areas are in units of radians**2)
+    !
+      mr_cnst = rearth**3/gravit
+      mo_cnst = omega_cam*rearth**4/gravit
+      do k = 1, npz
+         do j=js,je
+            do i = is,ie
+               pdel = delp(i,j,k)
+               cos_lat = cos(gridstruct%agrid_64(i,j,2))
+               mr_tmp   = mr_cnst*ua(i,j,k)*pdel*cos_lat
+               mo_tmp   = mo_cnst*pdel*cos_lat**2
+               
+               mrnew(i,j) = mrnew(i,j) + mr_tmp
+               monew(i,j) = monew(i,j) + mo_tmp
+            end do
+         end do
+      end do
+
+      se(is:ie,js:je)=se(is:ie,js:je)+senew(is:ie,js:je)
+      ke(is:ie,js:je)=ke(is:ie,js:je)+kenew(is:ie,js:je)
+      wv(is:ie,js:je)=wv(is:ie,js:je)+wvnew(is:ie,js:je)
+      wl(is:ie,js:je)=wl(is:ie,js:je)+wlnew(is:ie,js:je)
+      wi(is:ie,js:je)=wi(is:ie,js:je)+winew(is:ie,js:je)
+      wr(is:ie,js:je)=wr(is:ie,js:je)+wrnew(is:ie,js:je)
+      ws(is:ie,js:je)=ws(is:ie,js:je)+wsnew(is:ie,js:je)
+      wg(is:ie,js:je)=wg(is:ie,js:je)+wgnew(is:ie,js:je)
+      mr(is:ie,js:je)=mr(is:ie,js:je)+mrnew(is:ie,js:je)
+      mo(is:ie,js:je)=mo(is:ie,js:je)+monew(is:ie,js:je)
+
+      if (last_step) then 
+         rncnt=ncnt
+         se(is:ie,js:je)=se(is:ie,js:je)/rncnt
+         ke(is:ie,js:je)=ke(is:ie,js:je)/rncnt
+         wv(is:ie,js:je)=wv(is:ie,js:je)/rncnt
+         wl(is:ie,js:je)=wl(is:ie,js:je)/rncnt
+         wi(is:ie,js:je)=wi(is:ie,js:je)/rncnt
+         wr(is:ie,js:je)=wr(is:ie,js:je)/rncnt
+         ws(is:ie,js:je)=ws(is:ie,js:je)/rncnt
+         wg(is:ie,js:je)=wg(is:ie,js:je)/rncnt
+         mr(is:ie,js:je)=mr(is:ie,js:je)/rncnt
+         mo(is:ie,js:je)=mo(is:ie,js:je)/rncnt
+
+
+         if (printglobals) then
+         areasqrad(isd:ied,jsd:jed) = gridstruct%area_64(isd:ied,jsd:jed)/(rearth*rearth)
+
+         se_glob=g_sum(domain, se(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         ke_glob=g_sum(domain, ke(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         wv_glob=g_sum(domain, wv(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         wl_glob=g_sum(domain, wl(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         wi_glob=g_sum(domain, wi(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         wr_glob=g_sum(domain, wr(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         ws_glob=g_sum(domain, ws(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         wg_glob=g_sum(domain, wg(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         mr_glob=g_sum(domain, mr(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         mo_glob=g_sum(domain, mo(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         if (ixtt_ffsl > 1) tt_glob=g_sum(domain, tt(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+      
+         mr_glob=g_sum(domain, mr(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+         mo_glob=g_sum(domain, mo(is:ie,js:je), is, ie, js, je, ng, gridstruct%area_64, 1)
+
+      
+         if (mpp_pe().eq.0) then
+            if (fv3_lcp_moist) then
+               write(6, '(a,e25.17)') 'global wet static energy se_'//trim(outfld_name_suffix)//')            = ',se_glob
+            else
+               write(6, '(a,e25.17)') 'global dry static energy se_'//trim(outfld_name_suffix)//')            = ',se_glob
+            end if
+            write(6, '(a,e25.17)') 'global kinetic energy ke_'//trim(outfld_name_suffix)//')               = ',ke_glob
+            write(6, '(a,e25.17)') 'global total energy se_plus_ke_'//trim(outfld_name_suffix)//')         = ',(ke_glob+se_glob)
+            write(6, '(a,e25.17)') 'global column integrated vapor wv_'//trim(outfld_name_suffix)//'       = ',wv_glob
+            write(6, '(a,e25.17)') 'global column integrated liquid wl_'//trim(outfld_name_suffix)//'      = ',wl_glob
+            write(6, '(a,e25.17)') 'global column integrated ice wi_'//trim(outfld_name_suffix)//'         = ',wi_glob
+            write(6, '(a,e25.17)') 'global column integrated liquid rain wr_'//trim(outfld_name_suffix)//'       = ',wr_glob
+            write(6, '(a,e25.17)') 'global column integrated liquid snow ws_'//trim(outfld_name_suffix)//'      = ',ws_glob
+            write(6, '(a,e25.17)') 'global column integrated graupel wg_'//trim(outfld_name_suffix)//'         = ',wg_glob
+            write(6, '(a,e25.17)') 'global column integrated wind AAM mr_'//trim(outfld_name_suffix)//'         = ',mr_glob
+            write(6, '(a,e25.17)') 'global column integrated mass AAM mo_'//trim(outfld_name_suffix)//'         = ',mo_glob
+            if (ixtt_ffsl > 1)      write(6, '(a,e25.17)') 'global column integrated test tracer tt_'//trim(outfld_name_suffix)//' = ',tt_glob
+         end if
+         end if
+      end if
+
+    end subroutine calc_tot_energy_dynamics1
+
 
 end module fv_dynamics_mod

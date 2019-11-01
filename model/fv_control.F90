@@ -414,15 +414,20 @@ module fv_control_mod
          target_lon = target_lon * pi/180.
          target_lat = target_lat * pi/180.
 
+! Delay tracer_manager_init call until after constituents added via phys_register
+! Just use ncnst to allow ATM structure to be allocated correctly.
+!
 !--------------------------------------------------
 ! override number of tracers by reading field_table
 !--------------------------------------------------
 
          !not sure if this works with multiple grids
-         call tm_register_tracers (MODEL_ATMOS, ncnst, nt_prog, pnats, num_family)
-         if(is_master()) then
-            write(*,*) 'ncnst=', ncnst,' num_prog=',nt_prog,' pnats=',pnats,' dnats=',dnats,' num_family=',num_family         
-            print*, ''
+         if (.not. associated(ncnst)) then
+            call tm_register_tracers (MODEL_ATMOS, ncnst, nt_prog, pnats, num_family)
+            if(is_master()) then
+               write(*,*) 'ncnst=', ncnst,' num_prog=',nt_prog,' pnats=',pnats,' dnats=',dnats,' num_family=',num_family         
+               print*, ''
+            endif
          endif
 
          if (grids_on_this_pe(n)) then
@@ -602,7 +607,7 @@ module fv_control_mod
     call timing_off('TOTAL')
     call timing_prt( gid )
 
-    call fv_restart_end(Atm, grids_on_this_pe)
+!jt    call fv_restart_end(Atm, grids_on_this_pe)
     call fv_io_exit()
 
   ! Free temporary memory from sw_core routines
@@ -611,7 +616,7 @@ module fv_control_mod
     call grid_utils_end
 
     do n = 1, ntilesMe
-       call deallocate_fv_atmos_type(Atm(n))
+!jt       call deallocate_fv_atmos_type(Atm(n))
     end do
 
 
