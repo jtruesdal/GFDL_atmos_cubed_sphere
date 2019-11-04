@@ -219,6 +219,15 @@ contains
     real, intent(inout) :: delz(bd%isd:,bd%jsd:,1:)   !< delta-height (m); non-hydrostatic only
     real, intent(inout) ::  ze0(bd%is:, bd%js: ,1:) !< height at edges (m); non-hydrostatic
     real, intent(inout), dimension(bd%isd:bd%ied  ,bd%jsd:bd%jed,npz) :: diss_est! diffusion estimate for SKEB
+#if ( defined CALC_ENERGY )
+   real, intent(IN) :: gravit,cpair,rearth,omega_cam
+   real, intent(OUT), dimension(bd%is:bd%ie  ,bd%js:bd%je  ,5)  ::  se,ke,wv,wl,wi,wr,wsno,wg,tt,mo,mr
+   integer, intent(IN)  :: qsize
+   integer, intent(IN)  :: qsize_condensate_loading
+   integer, intent(IN)  :: qsize_condensate_loading_idx(qsize_condensate_loading),qsize_tracer_idx_cam2dyn(qsize)
+   real, intent(IN)     :: qsize_condensate_loading_cp(qsize_condensate_loading),qsize_condensate_loading_cv(qsize_condensate_loading)
+   logical, intent(IN) :: fv3_lcp_moist,fv3_lcv_moist
+#endif
 ! ze0 no longer used
 
 !-----------------------------------------------------------------------
