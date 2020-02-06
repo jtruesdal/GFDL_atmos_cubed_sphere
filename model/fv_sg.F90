@@ -104,8 +104,8 @@ public  fv_subgrid_z, qsmith, neg_adj3, neg_adj2
 
 contains
 
-
-#ifdef GFS_PHYS
+#if defined( GFS_PHYS ) || defined ( CESMCOUPLED )
+!jt#ifdef GFS_PHYS
 !>@brief The subroutine 'fv_subgrid_z' performs dry convective adjustment mixing.
 !>@details Two different versions of this subroutine are implemented:
 !!-one for the GFS physics
@@ -996,6 +996,7 @@ contains
          do i=is,ie
             qcon(i,k) = q0(i,k,liq_wat)+q0(i,k,ice_wat)+q0(i,k,snowwat)+q0(i,k,rainwat)
          enddo
+      enddo
    else
       do k=1,kbot
          do i=is,ie

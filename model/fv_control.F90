@@ -419,10 +419,12 @@ module fv_control_mod
 !--------------------------------------------------
 
          !not sure if this works with multiple grids
-         call tm_register_tracers (MODEL_ATMOS, ncnst, nt_prog, pnats, num_family)
-         if(is_master()) then
-            write(*,*) 'ncnst=', ncnst,' num_prog=',nt_prog,' pnats=',pnats,' dnats=',dnats,' num_family=',num_family         
-            print*, ''
+         if (.not. associated(ncnst)) then
+            call tm_register_tracers (MODEL_ATMOS, ncnst, nt_prog, pnats, num_family)
+            if(is_master()) then
+               write(*,*) 'ncnst=', ncnst,' num_prog=',nt_prog,' pnats=',pnats,' dnats=',dnats,' num_family=',num_family         
+               print*, ''
+            endif
          endif
 
          if (grids_on_this_pe(n)) then
